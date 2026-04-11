@@ -1,5 +1,7 @@
 # toolbx-zed
 
+[![Ferris.love badge](https://ferris.love/badge/lingrottin/toolbx-zed?show=call_fn%2Cdef_fn%2Cdef_struct%2Cdef_method%2Cdef_trait&variant=mini)](https://ferris.love/lingrottin/toolbx-zed)
+
 A seamless integration tool to use the [Zed](https://zed.dev/) editor within [Toolbx](https://containertoolbx.org/) containers. 
 
 ## Installation
