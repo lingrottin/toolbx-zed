@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::env::consts::EXE_EXTENSION;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::process::Command;
@@ -131,24 +132,19 @@ fn init_wrapper_bins() -> Result<()> {
 }
 
 struct ContainerEnv {
-    name: String,
     id: String,
 }
 
 impl ContainerEnv {
     fn load() -> Result<Self> {
         let content = std::fs::read_to_string("/run/.containerenv")?;
-        let mut name = None;
         let mut id = None;
         for line in content.lines() {
-            if line.starts_with("name=") {
-                name = Some(line[5..].trim_matches('"').to_string());
-            } else if line.starts_with("id=") {
+            if line.starts_with("id=") {
                 id = Some(line[3..].trim_matches('"').to_string());
             }
         }
         Ok(Self {
-            name: name.ok_or_else(|| bnyhow!("NAME not found in /run/.containerenv"))?,
             id: id.ok_or_else(|| bnyhow!("ID not found in /run/.containerenv"))?,
         })
     }
@@ -183,7 +179,7 @@ fn get_path() -> OsString {
 }
 
 fn check_binary_exists(cmd: &str) -> bool {
-    log::trace!("checking whether binary exists: {}", cmd);
+    log::debug!("checking whether binary exists: {}", cmd);
     let path = get_path();
     match Command::new(cmd).env("PATH", path).spawn() {
         Ok(mut child) => {
@@ -201,17 +197,25 @@ fn get_zed(extra_path: Option<String>) -> Result<RefCell<Command>> {
         let mut cmd = Command::new("flatpak-spawn");
         cmd.arg("--host").arg("flatpak").arg("run");
         if let Some(p) = extra_path {
-            cmd.arg(format!("--env=PATH={}:/app/bin", p));
+            cmd.arg("--command=env");
+            cmd.arg("dev.zed.Zed");
+            cmd.arg(format!("PATH={}:/app/bin:/usr/bin:/bin", p));
+            cmd.arg("/app/bin/zed-wrapper");
+        } else {
+            cmd.arg("dev.zed.Zed");
         }
-        cmd.arg("dev.zed.Zed");
         Ok(RefCell::new(cmd))
     } else if check_binary_exists("flatpak") {
         let mut cmd = Command::new("flatpak");
         cmd.arg("run");
         if let Some(p) = extra_path {
-            cmd.arg(format!("--env=PATH={}:/app/bin", p));
-        };
-        cmd.arg("dev.zed.Zed");
+            cmd.arg("--command=env");
+            cmd.arg("dev.zed.Zed");
+            cmd.arg(format!("PATH={}:/app/bin:/usr/bin:/bin", p));
+            cmd.arg("/app/bin/zed-wrapper");
+        } else {
+            cmd.arg("dev.zed.Zed");
+        }
         Ok(RefCell::new(cmd))
     } else if check_binary_exists("zed") {
         let mut cmd = Command::new("zed");
@@ -244,7 +248,26 @@ fn zed(args: Vec<String>) -> Result<()> {
             return arg.to_string();
         }
 
-        let absolute = std::path::absolute(arg).unwrap_or(arg.into());
+        if arg.starts_with("-")
+            || arg.starts_with("/")
+            || (arg.contains("://") && !arg.starts_with("file://"))
+        {
+            // flags, absolute paths and URLs are not modified
+            return arg.to_string();
+        }
+
+        let arg = if arg.starts_with("file://") {
+            arg.trim_start_matches("file://").to_string()
+        } else if arg.starts_with("~") {
+            arg.replace(
+                "~",
+                &std::env::var("HOME").unwrap_or_else(|_| "~".to_string()),
+            )
+        } else {
+            arg.to_string()
+        };
+
+        let absolute = std::path::absolute(arg.clone()).unwrap_or(arg.into());
         format!(
             "ssh://{}@{}.toolbx/{}",
             user_id().unwrap_or("user".to_string()),
@@ -253,7 +276,7 @@ fn zed(args: Vec<String>) -> Result<()> {
         )
     };
     // parse arguments
-    log::trace!("zed raw args: {:?}", args);
+    log::debug!("zed raw args: {:?}", args);
     let mut actual_args = Vec::new();
     let mut asis = container_env.is_none();
     let mut cur_param = 0;
@@ -263,7 +286,9 @@ fn zed(args: Vec<String>) -> Result<()> {
         'parse: while let Some(arg) = iteration.next() {
             if arg == "--help" {
                 println!("Usage: toolbx-zed [OPTIONS] [PATHS]...");
-                println!("A wrapper for ssh and sftp that runs them inside the toolbox container.");
+                println!(
+                    "A wrapper for the Zed editor that configures it to run on a Toolbx container"
+                );
                 println!();
                 println!("Options:");
                 println!("  --help    Print help information");
@@ -310,7 +335,7 @@ fn zed(args: Vec<String>) -> Result<()> {
     };
 
     // Run Zed with the processed arguments
-    log::trace!("preparing base PATH for zed");
+    log::debug!("preparing base PATH for zed");
     let mut path = None;
     if let Some(container_env) = container_env.as_ref() {
         let wrapper_dir = xdg_data_home().join("toolbx-zed-bin");
@@ -327,19 +352,28 @@ fn zed(args: Vec<String>) -> Result<()> {
     for arg in args {
         cmd.arg(arg);
     }
-    log::trace!("Launching Zed with processed arguments: {:?}", cmd);
+    log::debug!("Launching Zed with processed arguments: {:?}", cmd);
+    cmd.stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    let status = cmd.spawn()?.wait()?;
+    if !status.success() {
+        log::error!("Zed process exited with status: {}", status);
+        std::process::exit(status.code().unwrap_or(1));
+    }
 
     Ok(())
 }
 
-fn parse_ssh_dest(dest: &str) -> Option<String> {
+fn parse_ssh_dest(dest: &str) -> Option<(String, String)> {
     log::debug!("parsing ssh destination: {}", dest);
     // parse the custom ssh destination that we created above, and extract the container id
     // the format is user@container_id.toolbx
     if let Some(at_pos) = dest.find('@') {
+        let before_at = &dest[..at_pos];
         let after_at = &dest[at_pos + 1..];
         if let Some(dot_pos) = after_at.find(".toolbx") {
-            return Some(after_at[..dot_pos].to_string());
+            return Some((before_at.to_string(), after_at[..dot_pos].to_string()));
         }
     }
     None
@@ -348,14 +382,17 @@ fn parse_ssh_dest(dest: &str) -> Option<String> {
 fn get_podman() -> RefCell<Command> {
     log::debug!("resolving podman command");
     // This is usually ran by Zed in its flatpak sandbox
-    // so we check Podman binary (for editor like Zed, it is possible
+    // check Podman binary first (for editor like Zed, it is possible
     // for users to expose the host PATH to the sandbox, so we check
-    // if podman is available first), and if not, we use flatpak-spawn
-    // to call Podman on the host.
+    // if podman is available first) And if podman is not available,
+    // we use flatpak-spawn to call Podman on the host.
 
     if check_binary_exists("podman") {
         RefCell::new(Command::new("podman"))
     } else {
+        log::info!(
+            "podman binary not found in PATH, using flatpak-spawn to call podman on the host"
+        );
         let mut cmd = Command::new("flatpak-spawn");
         cmd.arg("--host").arg("podman");
         RefCell::new(cmd)
@@ -367,18 +404,25 @@ fn ssh(args: Vec<String>) -> Result<()> {
     // only include ones that Zed uses here
     let flags_with_parameter = ["-o", "-L", "-p"];
     // parse args
+
+    // Currently this variable is never read because if we respect
+    // the pseudo tty setting here, Zed proxy will unexpectedly exit
+    // with status code 130. Seems to be a problem of Podman-exec.
+    #[allow(unused)]
     let mut pseudo_term = true;
+
     let mut master = false;
     let mut param = None;
     let mut idx = 0;
     let mut dest = None;
-    log::trace!("ssh raw args: {:?}", args);
+    log::debug!("ssh raw args: {:?}", args);
     let mut iter = args.clone().into_iter();
     while let Some(arg) = iter.next() {
         idx += 1;
         if arg == "--help" {
             println!("Usage: toolbx-zed(ssh) [OPTIONS] [SSH_ARGS]...");
-            println!("A wrapper for ssh that runs it inside the toolbox container.");
+            println!("A wrapper for ssh that intercepts Zed's remote development connections");
+            println!("and routes them to a Toolbx container via podman.");
             println!();
             println!("Options:");
             println!("  --help    Print help information");
@@ -399,23 +443,54 @@ fn ssh(args: Vec<String>) -> Result<()> {
         }
         // process flags that we care about
         else if arg.as_str() == "-T" {
-            pseudo_term = false;
+            #[allow(unused_assignments)]
+            {
+                pseudo_term = false;
+            }
         } else if arg.as_str() == "-t" {
-            pseudo_term = true;
+            #[allow(unused_assignments)]
+            {
+                pseudo_term = true;
+            }
         } else if arg.as_str() == "-N" {
             master = true;
         }
     }
-    let mut cmd_args = Vec::new();
+    let mut cmd_args: Vec<String>;
     if dest.is_none() || (args.len() == idx && !master) {
-        log::trace!(
-            "no destination specified for ssh command; {dest:?}, {args:?}, {idx}, {master}"
-        );
+        log::debug!("no destination specified for ssh command");
         return Err(bnyhow!("ERROR: No destination specified for ssh command"));
     } else if master {
         // sleep until termination signal or ctrl-c
+
         // Zed use ControlMaster=yes to keep the ssh connection alive, but don't use that process's
-        // stdio
+        // stdio for communication. Instead it looks for EOF in stdout of that process to determine
+        // when the connection is established, and then keep the process alive until the user
+        // terminate the connection. (this behavior is indicated by ControlMaster=yes and -N) So here
+        // we close the stdout immediately and then wait a termination signal.
+
+        // Closing stdout using `std` functions requires a nightly toolchain as of now, so we use
+        // libc directly. Code below basically comes from the nightly api `StdioExt::take_fd()`
+        //
+        // See https://doc.rust-lang.org/std/os/unix/io/trait.StdioExt.html for more details.
+        {
+            use std::os::fd::AsRawFd;
+            let stdout = std::io::stdout();
+            log::debug!("dropping stdout");
+            fn null_fd() -> std::io::Result<OwnedFd> {
+                let null_dev = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open("/dev/null")?;
+                Ok(null_dev.into())
+            }
+            let null_fd = null_fd()?;
+            unsafe {
+                libc::dup2(null_fd.as_raw_fd(), stdout.as_raw_fd());
+            }
+            log::debug!("stdout dropped");
+        }
+
         let _ = ctrlc::set_handler(|| {
             WAIT_FOR_SIGINT_ONCELOCK.get_or_init(|| true);
         });
@@ -431,8 +506,10 @@ fn ssh(args: Vec<String>) -> Result<()> {
         let _ = std::fs::remove_file(path.join("sftp"));
         let _ = std::fs::remove_dir(path);
 
-        // for matching OpenSSH's behavior
-        // 255 indicates a common ssh connection error
+        // matching OpenSSH's behavior
+        // 255 indicates a common ssh connection error, and this includes
+        // our case where ssh is killed by SIGINT after connection is established,
+        // and -N is specified.
         std::process::exit(255);
     } else {
         cmd_args = args.clone().into_iter().skip(idx).collect();
@@ -459,20 +536,26 @@ fn ssh(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let container_id = dest.unwrap();
-    log::debug!(
-        "sftp destination resolved to container id: {}",
-        container_id
-    );
+    // somehow Zed puts -T flag after destination, so we perform a double-check here
+    if cmd_args[0] == "-T" {
+        #[allow(unused_assignments)]
+        {
+            pseudo_term = true;
+        }
+        cmd_args.remove(0);
+    }
+
+    let (user_id, container_id) = dest.unwrap();
     log::debug!("ssh destination resolved to container id: {}", container_id);
     let cmd = get_podman();
-    log::trace!("executing podman cp for sftp upload");
     let mut cmd = cmd.borrow_mut();
-    cmd.arg("exec").arg("-i");
-    if pseudo_term {
-        cmd.arg("-t");
-    }
-    cmd.arg(container_id);
+    cmd.arg("exec").arg("--user").arg(user_id).arg("-i");
+
+    // if pseudo_term {
+    //    cmd.arg("-t");
+    // }
+
+    cmd.arg(container_id).arg("sh").arg("-c");
 
     for arg in cmd_args {
         cmd.arg(arg);
@@ -482,7 +565,9 @@ fn ssh(args: Vec<String>) -> Result<()> {
         .stderr(std::process::Stdio::inherit());
     let status = cmd.spawn()?.wait()?;
     if !status.success() {
-        return Err(bnyhow!("command failed with status: {}", status));
+        log::error!("command failed with status: {}", status);
+        // SSH returns the return code of the remote command, we want to do the same
+        std::process::exit(status.code().unwrap_or(1));
     }
 
     Ok(())
@@ -491,15 +576,17 @@ fn ssh(args: Vec<String>) -> Result<()> {
 fn sftp(args: Vec<String>) -> Result<()> {
     log::info!("running sftp wrapper with {} args", args.len());
     // only include ones that Zed uses here
-    // "-b" is followed by "-" in these cases, which will be ignored by .starts_with("-"), so we don't include it here
+    // "-b" is followed by "-" in these cases, which will be ignored by .starts_with("-"), so we don't
+    // count it here
     let flags_with_parameter = ["-o", "-P"];
     let mut dest = None;
     let mut param = false;
-    log::trace!("sftp raw args: {:?}", args);
+    log::debug!("sftp raw args: {:?}", args);
     for arg in args.clone() {
         if arg == "--help" {
             println!("Usage: toolbx-zed(sftp) [OPTIONS] [SFTP_ARGS]...");
-            println!("A wrapper for sftp that runs it inside the toolbox container.");
+            println!("A wrapper for sftp that intercepts Zed's remote development file transfers");
+            println!("and routes them to a Toolbx container via podman.");
             println!();
             println!("Options:");
             println!("  --help    Print help information");
@@ -540,20 +627,25 @@ fn sftp(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let container_id = dest.unwrap();
+    let (user_id, container_id) = dest.unwrap();
 
+    log::debug!(
+        "sftp destination resolved to container id: {}",
+        container_id
+    );
     // parse batch input
     // Zed only inputs 1 command each launch, so we don't need to handle multiple commands here
     // format: "put [-r] local_path remote_path"
 
-    // Podman defaults to recursive (and there's no way to turn it off)
-    // so we ignore this
+    // Recurse is the default behavior of podman-copy (and there's no way to turn it off) so we
+    // ignore this
+    //
     // let mut recursive = false;
 
-    let mut local_path = None;
-    let mut remote_path = None;
+    let local_path;
+    let remote_path;
     let mut buffer = String::new();
-    log::trace!("waiting for sftp batch input");
+    log::debug!("waiting for sftp batch input");
     std::io::stdin().read_line(&mut buffer)?;
 
     let parts = buffer.trim().split_whitespace().collect::<Vec<_>>();
@@ -562,6 +654,7 @@ fn sftp(args: Vec<String>) -> Result<()> {
     }
     if parts[0] == "put" {
         if parts[1] == "-r" {
+            // recursive = true;
             local_path = Some(parts[2].trim_matches('"'));
             remote_path = Some(parts[3].trim_matches('"'));
         } else {
@@ -576,6 +669,12 @@ fn sftp(args: Vec<String>) -> Result<()> {
         return Err(bnyhow!("Local path or remote path is missing"));
     }
 
+    log::debug!(
+        "executing podman cp for sftp upload: podman cp {} {}:{}",
+        local_path.unwrap(),
+        container_id,
+        remote_path.unwrap()
+    );
     let cmd = get_podman();
     let mut cmd = cmd.borrow_mut();
     cmd.arg("cp").arg(local_path.unwrap()).arg(format!(
@@ -587,6 +686,26 @@ fn sftp(args: Vec<String>) -> Result<()> {
     if !status.success() {
         return Err(bnyhow!("command failed with status: {}", status));
     }
+
+    // change ownership of the uploaded file to the user to avoid permission issues
+    //
+    // By default the default user of Toolbx images is a pseudo root user in the container
+    // but we usually work as the host user (users on the host and in the container share the
+    // same HOME and UID and GID), so the uploaded file will be owned by pseudo root and not
+    // writable by the user. We need to change the ownership of the uploaded file to the user.
+    let cmd = get_podman();
+    let mut cmd = cmd.borrow_mut();
+    cmd.arg("exec")
+        .arg("sh")
+        .arg("-c")
+        .arg(format!(
+            "chown -R {}:{} {}",
+            user_id,
+            user_id,
+            remote_path.unwrap()
+        ))
+        .spawn()?
+        .wait()?;
 
     Ok(())
 }
