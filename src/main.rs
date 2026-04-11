@@ -405,10 +405,6 @@ fn ssh(args: Vec<String>) -> Result<()> {
     let flags_with_parameter = ["-o", "-L", "-p"];
     // parse args
 
-    // Currently this variable is never read because if we respect
-    // the pseudo tty setting here, Zed proxy will unexpectedly exit
-    // with status code 130. Seems to be a problem of Podman-exec.
-    #[allow(unused)]
     let mut pseudo_term = true;
 
     let mut master = false;
@@ -443,15 +439,9 @@ fn ssh(args: Vec<String>) -> Result<()> {
         }
         // process flags that we care about
         else if arg.as_str() == "-T" {
-            #[allow(unused_assignments)]
-            {
-                pseudo_term = false;
-            }
+            pseudo_term = false;
         } else if arg.as_str() == "-t" {
-            #[allow(unused_assignments)]
-            {
-                pseudo_term = true;
-            }
+            pseudo_term = true;
         } else if arg.as_str() == "-N" {
             master = true;
         }
@@ -538,10 +528,7 @@ fn ssh(args: Vec<String>) -> Result<()> {
 
     // somehow Zed puts -T flag after destination, so we perform a double-check here
     if cmd_args[0] == "-T" {
-        #[allow(unused_assignments)]
-        {
-            pseudo_term = true;
-        }
+        pseudo_term = false;
         cmd_args.remove(0);
     }
 
@@ -551,9 +538,9 @@ fn ssh(args: Vec<String>) -> Result<()> {
     let mut cmd = cmd.borrow_mut();
     cmd.arg("exec").arg("--user").arg(user_id).arg("-i");
 
-    // if pseudo_term {
-    //    cmd.arg("-t");
-    // }
+    if pseudo_term {
+        cmd.arg("-t");
+    }
 
     cmd.arg(container_id).arg("sh").arg("-c");
 
