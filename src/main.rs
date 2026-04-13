@@ -193,6 +193,9 @@ fn check_binary_exists(cmd: &str) -> bool {
 fn get_zed(extra_path: Option<String>) -> Result<RefCell<Command>> {
     log::debug!("resolving zed executable");
     // prefer flatpak-spawn because we want to work in toolbx
+    // See https://containertoolbx.org/doc
+    // > Images SHOULD have the flatpak-spawn(1) command. Otherwise, it won’t be possible
+    // > to use toolbox(1) inside containers created from those images.
     if check_binary_exists("flatpak-spawn") {
         let mut cmd = Command::new("flatpak-spawn");
         cmd.arg("--host").arg("flatpak").arg("run");
@@ -683,6 +686,7 @@ fn sftp(args: Vec<String>) -> Result<()> {
     let cmd = get_podman();
     let mut cmd = cmd.borrow_mut();
     cmd.arg("exec")
+        .arg(container_id)
         .arg("sh")
         .arg("-c")
         .arg(format!(
