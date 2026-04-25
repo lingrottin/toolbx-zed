@@ -39,7 +39,7 @@ Once installed, a `zed` command will be available in your configured PATH.
 
 If you are using the Flatpak version of Zed (`dev.zed.Zed` or `dev.zed.Zed-Preview`), it requires access to your home directory to interact properly with `toolbx-zed`. 
 
-This is usually enabled by default, but if you encounter issues like "ssh: Could not resolve hostname <a very long alphanumeric string>.toolbx: Name or service not known",
+This is usually enabled by default, but if you encounter issues like `ssh: Could not resolve hostname <a very long alphanumeric string>.toolbx: Name or service not known`,
 ensure that Zed has the `--filesystem=home` permission granted. You can manage this using [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or via the command line:
 
 ```bash
