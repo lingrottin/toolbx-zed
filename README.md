@@ -37,12 +37,31 @@ Once installed, a `zed` command will be available in your configured PATH.
 
 ## Notes for Flatpak Users
 
-If you are using the Flatpak version of Zed (`dev.zed.Zed`), it requires access to your home directory to interact properly with `toolbx-zed`. 
+If you are using the Flatpak version of Zed (`dev.zed.Zed` or `dev.zed.Zed-Preview`), it requires access to your home directory to interact properly with `toolbx-zed`. 
 
-This is usually enabled by default, but if you encounter permission issues, ensure that Zed has the `--filesystem=home` permission granted. You can manage this using [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or via the command line:
+This is usually enabled by default, but if you encounter issues like "ssh: Could not resolve hostname <a very long alphanumeric string>.toolbx: Name or service not known",
+ensure that Zed has the `--filesystem=home` permission granted. You can manage this using [Flatseal](https://flathub.org/apps/com.github.tchx84.Flatseal) or via the command line:
 
 ```bash
 flatpak override --user --filesystem=home dev.zed.Zed
+```
+
+When using Flatpak Zed, `toolbx-zed` will explicitly disallow Zed to escape the Flatpak sandbox. This is because when Zed tries to do that, it's nearly impossible to make Zed use
+our fake `ssh` and `sftp` without adding them to **your** PATH, (instead of a temporary PATH only inserted during a Zed session.) Don't worry! This would basically affect nothing
+since after all Zed thinks it's developing "remotely", so the environment on the "client" does not matter at all.
+
+### Zed Preview
+
+Set the `TOOLBX_ZED_FLATPAK_PREVIEW` environment variable to make `toolbx-zed` use the preview version of Zed. **(Flatpak only)**
+
+```bash
+TOOLBX_ZED_FLATPAK_PREVIEW=1 zed [path]
+```
+
+To persist this behavior, add the folowing to your `~/.bashrc`:
+
+```bash
+alias zed="env TOOLBX_ZED_FLATPAK_PREVIEW=1 zed"
 ```
 
 ## Debugging

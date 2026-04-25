@@ -170,10 +170,18 @@ fn get_path() -> OsString {
     }
     let path = path.unwrap();
     let splitted = std::env::split_paths(&path).collect::<Vec<_>>();
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::new());
+    let should_remove: Vec<PathBuf> = vec![
+        std::env::current_exe()
+            .unwrap_or_else(|_| std::path::PathBuf::new())
+            .parent()
+            .unwrap_or_else(|| "".as_ref())
+            .into(),
+        xdg_data_home().join("toolbx-zed"),
+        xdg_data_home().join("toolbx-zed-bin"),
+    ];
     let filtered = splitted
         .into_iter()
-        .filter(|p| p != &current_exe.parent().unwrap_or_else(|| "".as_ref()))
+        .filter(|p| !should_remove.contains(p))
         .collect::<Vec<_>>();
     std::env::join_paths(filtered).unwrap_or_else(|_| "".into())
 }
@@ -192,6 +200,13 @@ fn check_binary_exists(cmd: &str) -> bool {
 
 fn get_zed(extra_path: Option<String>) -> Result<RefCell<Command>> {
     log::debug!("resolving zed executable");
+
+    let flatpak_id = if std::env::var("TOOLBX_ZED_FLATPAK_PREVIEW").is_ok() {
+        "dev.zed.Zed-Preview"
+    } else {
+        "dev.zed.Zed"
+    };
+
     // prefer flatpak-spawn because we want to work in toolbx
     // See https://containertoolbx.org/doc
     // > Images SHOULD have the flatpak-spawn(1) command. Otherwise, it won’t be possible
@@ -201,11 +216,13 @@ fn get_zed(extra_path: Option<String>) -> Result<RefCell<Command>> {
         cmd.arg("--host").arg("flatpak").arg("run");
         if let Some(p) = extra_path {
             cmd.arg("--command=env");
-            cmd.arg("dev.zed.Zed");
+            cmd.arg(flatpak_id);
             cmd.arg(format!("PATH={}:/app/bin:/usr/bin:/bin", p));
+            cmd.arg("ZED_FLATPAK_NO_ESCAPE=1");
             cmd.arg("/app/bin/zed-wrapper");
+            cmd.env("PATH", format!("{}:{}", p, get_path().to_string_lossy()));
         } else {
-            cmd.arg("dev.zed.Zed");
+            cmd.arg(flatpak_id);
         }
         Ok(RefCell::new(cmd))
     } else if check_binary_exists("flatpak") {
@@ -213,11 +230,13 @@ fn get_zed(extra_path: Option<String>) -> Result<RefCell<Command>> {
         cmd.arg("run");
         if let Some(p) = extra_path {
             cmd.arg("--command=env");
-            cmd.arg("dev.zed.Zed");
+            cmd.arg(flatpak_id);
             cmd.arg(format!("PATH={}:/app/bin:/usr/bin:/bin", p));
+            cmd.arg("ZED_FLATPAK_NO_ESCAPE=1");
             cmd.arg("/app/bin/zed-wrapper");
+            cmd.env("PATH", format!("{}:{}", p, get_path().to_string_lossy()));
         } else {
-            cmd.arg("dev.zed.Zed");
+            cmd.arg(flatpak_id);
         }
         Ok(RefCell::new(cmd))
     } else if check_binary_exists("zed") {
@@ -251,11 +270,8 @@ fn zed(args: Vec<String>) -> Result<()> {
             return arg.to_string();
         }
 
-        if arg.starts_with("-")
-            || arg.starts_with("/")
-            || (arg.contains("://") && !arg.starts_with("file://"))
-        {
-            // flags, absolute paths and URLs are not modified
+        if arg.starts_with("-") || (arg.contains("://") && !arg.starts_with("file://")) {
+            // flags and URLs are not modified
             return arg.to_string();
         }
 
@@ -403,6 +419,15 @@ fn get_podman() -> RefCell<Command> {
 }
 
 fn ssh(args: Vec<String>) -> Result<()> {
+    fn print_help() {
+        println!("Usage: toolbx-zed(ssh) [OPTIONS] [SSH_ARGS]...");
+        println!("A wrapper for ssh that intercepts Zed's remote development connections");
+        println!("and routes them to a Toolbx container via podman.");
+        println!();
+        println!("Options:");
+        println!("  --help    Print help information");
+    }
+
     log::info!("running ssh wrapper with {} args", args.len());
     // only include ones that Zed uses here
     let flags_with_parameter = ["-o", "-L", "-p"];
@@ -416,15 +441,14 @@ fn ssh(args: Vec<String>) -> Result<()> {
     let mut dest = None;
     log::debug!("ssh raw args: {:?}", args);
     let mut iter = args.clone().into_iter();
+    if args.len() == 0 {
+        print_help();
+        return Ok(());
+    }
     while let Some(arg) = iter.next() {
         idx += 1;
         if arg == "--help" {
-            println!("Usage: toolbx-zed(ssh) [OPTIONS] [SSH_ARGS]...");
-            println!("A wrapper for ssh that intercepts Zed's remote development connections");
-            println!("and routes them to a Toolbx container via podman.");
-            println!();
-            println!("Options:");
-            println!("  --help    Print help information");
+            print_help();
             return Ok(());
         }
 
@@ -488,16 +512,6 @@ fn ssh(args: Vec<String>) -> Result<()> {
             WAIT_FOR_SIGINT_ONCELOCK.get_or_init(|| true);
         });
         let _ = WAIT_FOR_SIGINT_ONCELOCK.wait();
-
-        // Cleanup
-        let path = std::env::current_exe()
-            .unwrap_or_else(|_| std::path::PathBuf::new())
-            .parent()
-            .unwrap_or_else(|| "".as_ref())
-            .join("toolbx-zed-tmp-bin");
-        let _ = std::fs::remove_file(path.join("ssh"));
-        let _ = std::fs::remove_file(path.join("sftp"));
-        let _ = std::fs::remove_dir(path);
 
         // matching OpenSSH's behavior
         // 255 indicates a common ssh connection error, and this includes
