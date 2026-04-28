@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "linux"))]
+compile_error!("toolbx-zed is for Linux only");
+
 use std::cell::RefCell;
 use std::env::consts::EXE_EXTENSION;
 use std::ffi::OsString;
