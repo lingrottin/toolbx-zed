@@ -2,6 +2,32 @@
 
 [![Ferris.love badge](https://ferris.love/badge/lingrottin/toolbx-zed?variant=mini)](https://ferris.love/lingrottin/toolbx-zed)
 
+> [!IMPORTANT]
+> 
+> `toolbx-zed` is being archived.
+>
+> Recent versions of Zed somehow fails to sync extensions to SSH remotes, (including those containers disguised by toolbx-zed) which makes this whole solution unable to function. There is no existing issue targeting this but it did actually happen on my computer. Also `toolbx-zed` is designed to handle the host local files, in-container local files and actual remote SSH files, but it only performed well in containers, for I'm lacking of the capability and effort to make it work properly.
+>
+> #### How to uninstall `toolbx-zed`
+>
+> ```bash
+> DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+> rm -r "${DATA_HOME}/toolbx-zed" "${DATA_HOME}/toolbx-zed-bin"
+> ```
+> 
+> #### The True Solution
+>
+> `toolbx-zed` is a workaround, from the very beginning to the very end. However the True solution always exists.
+>
+> 1. Uninstall `toolbx-zed`.
+> 2. Download the `.tar.gz` version of Zed [here](https://github.com/zed-industries/zed/releases/latest).
+> 3. Extract it to somewhere in your `$HOME`.
+> 4. Run `path/to/zed.app/bin/zed`.
+> 5. Click the hamburger menu icon at the top-left corner, and click "Install CLI" in the pop-up menu.
+> 6. You're all set.
+>
+> This solution is not as clean as `toolbox-vscode`. To use a GUI app without a registered `.desktop` icon is also not as comfortable as to use the Flatpak version. Unfortunately still, this is indeed the best way to use Zed in Toolbx containers.
+
 A seamless integration tool to use the [Zed](https://zed.dev/) editor within [Toolbx](https://containertoolbx.org/) containers. 
 
 ## Installation
