@@ -1,7 +1,3 @@
-# toolbx-zed
-
-[![Ferris.love badge](https://ferris.love/badge/lingrottin/toolbx-zed?variant=mini)](https://ferris.love/lingrottin/toolbx-zed)
-
 > [!IMPORTANT]
 > 
 > `toolbx-zed` is being archived.
@@ -14,19 +10,31 @@
 > DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 > rm -r "${DATA_HOME}/toolbx-zed" "${DATA_HOME}/toolbx-zed-bin"
 > ```
+>
+> Also please remove the related `$PATH` settings as well in your shell's `rc` file.
 > 
 > #### The True Solution
 >
 > `toolbx-zed` is a workaround, from the very beginning to the very end. However the True solution always exists.
 >
 > 1. Uninstall `toolbx-zed`.
-> 2. Download the `.tar.gz` version of Zed [here](https://github.com/zed-industries/zed/releases/latest).
-> 3. Extract it to somewhere in your `$HOME`.
-> 4. Run `path/to/zed.app/bin/zed`.
-> 5. Click the hamburger menu icon at the top-left corner, and click "Install CLI" in the pop-up menu.
-> 6. You're all set.
+> 2. Install Zed with the official installation script:
+> ```
+> curl -f https://zed.dev/install.sh | sh
+> ```
 >
-> This solution is not as clean as `toolbox-vscode`. To use a GUI app without a registered `.desktop` icon is also not as comfortable as to use the Flatpak version. Unfortunately still, this is indeed the best way to use Zed in Toolbx containers.
+> This solution is not as clean as `toolbox-vscode`, since there's no Flatpak protecting your PC.
+> Unfortunately still, this is indeed the best way to use Zed with Toolbx containers.
+
+<details>
+<summary>
+   If you still want to read the full README, expand this.
+</summary>
+
+# toolbx-zed
+
+[![Ferris.love badge](https://ferris.love/badge/lingrottin/toolbx-zed?variant=mini)](https://ferris.love/lingrottin/toolbx-zed)
+
 
 A seamless integration tool to use the [Zed](https://zed.dev/) editor within [Toolbx](https://containertoolbx.org/) containers. 
 
@@ -125,3 +133,4 @@ This project is open-source and available under the [MIT license](./LICENSE).
 ## Acknowledgement
 
 This project was inspired by [toolbox-vscode](https://github.com/owtaylor/toolbox-vscode).
+</details>
